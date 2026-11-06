@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="432" viewBox="0 0 432 432">
+<defs>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="5"/>
+  </filter>
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#1D315D"/>
+    <stop offset="1" stop-color="#102044"/>
+  </linearGradient>
+  <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#176BFF"/>
+    <stop offset="1" stop-color="#3150D9"/>
+  </linearGradient>
+</defs>
+<g transform="translate(25.92 25.92) scale(0.88)">
+<!-- soft shadow and watch crown -->
+<ellipse cx="216" cy="354" rx="111" ry="12" fill="#14213D" opacity=".12" filter="url(#shadow)"/>
+<rect x="194" y="62" width="44" height="29" rx="10" fill="url(#rim)"/>
+<rect x="201" y="53" width="30" height="19" rx="8" fill="#172A52" stroke="#14213D" stroke-width="4"/>
+<!-- stopwatch body -->
+<circle cx="216" cy="222" r="132" fill="#14213D"/>
+<circle cx="216" cy="218" r="124" fill="#FFFFFF" stroke="#14213D" stroke-width="7"/>
+<!-- minute ticks -->
+<g stroke="#14213D" stroke-linecap="round">
+  <g stroke-width="4.6">
+    <path d="M216 107 V124 M216 312 V329 M105 218 H122 M310 218 H327"/>
+    <path d="M137 139 L149 151 M283 285 L295 297 M137 297 L149 285 M283 151 L295 139"/>
+  </g>
+  <g stroke-width="3" opacity=".72">
+    <path d="M175 102 L179 113 M253 323 L257 334 M104 177 L115 181 M317 255 L328 259"/>
+    <path d="M111 253 L122 249 M310 181 L321 177 M175 334 L179 323 M253 113 L257 102"/>
+  </g>
+</g>
+<!-- electric-blue elapsed arc -->
+<path d="M216 94 A124 124 0 0 1 339 218" fill="none" stroke="url(#blue)" stroke-width="18" stroke-linecap="round"/>
+<!-- central 60 -->
+<text x="216" y="253" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="103" font-weight="800" letter-spacing="-8" fill="#14213D">60</text>
+<!-- speed/running rays -->
+<g stroke="#2459EB" stroke-width="9" stroke-linecap="round">
+  <path d="M322 71 L327 55"/>
+  <path d="M341 83 L354 69"/>
+  <path d="M348 105 L366 100"/>
+</g>
+</g>
+</svg>
