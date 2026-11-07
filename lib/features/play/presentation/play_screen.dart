@@ -3,24 +3,28 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../game/round_controller.dart';
-import '../logic/scoring.dart';
-import '../state/progress.dart';
-import '../theme/tokens.dart';
-import 'result_screen.dart';
-import 'widgets.dart';
+import '../../../core/progress.dart';
+import '../../../core/round_result.dart';
+import '../../../core/scoring.dart';
+import '../../../data/providers.dart';
+import '../../../services/feedback_service.dart';
+import '../../../shared/widgets.dart';
+import '../../../theme/tokens.dart';
+import '../../result/presentation/result_screen.dart';
+import '../application/round_controller.dart';
 
-class PlayScreen extends StatefulWidget {
+class PlayScreen extends ConsumerStatefulWidget {
   const PlayScreen({super.key, required this.mode});
 
   final RoundMode mode;
 
   @override
-  State<PlayScreen> createState() => _PlayScreenState();
+  ConsumerState<PlayScreen> createState() => _PlayScreenState();
 }
 
-class _PlayScreenState extends State<PlayScreen>
+class _PlayScreenState extends ConsumerState<PlayScreen>
     with SingleTickerProviderStateMixin {
   late final RoundController _round;
   late final Ticker _ticker;
@@ -30,15 +34,15 @@ class _PlayScreenState extends State<PlayScreen>
   @override
   void initState() {
     super.initState();
-    final AppState app = AppScope.read(context);
+    final DateTime now = ref.read(clockProvider)();
     final int seed = widget.mode == RoundMode.daily
-        ? app.dailySeed
+        ? dailySeedFor(now)
         : math.Random().nextInt(0x7FFFFFFF);
     _round = RoundController(
       mode: widget.mode,
       seed: seed,
-      startLevel: levelForRating(app.progress.rating),
-      onEvent: _feedback,
+      startLevel: levelForRating(ref.read(progressProvider).rating),
+      onEvent: ref.read(feedbackProvider).handle,
     );
     _ticker = createTicker((Duration _) {
       _round.tick(_clock.elapsedMilliseconds);
@@ -49,29 +53,14 @@ class _PlayScreenState extends State<PlayScreen>
     _ticker.start();
   }
 
-  void _feedback(RoundEvent e) {
-    switch (e) {
-      case RoundEvent.key:
-      case RoundEvent.skip:
-        HapticFeedback.selectionClick();
-      case RoundEvent.correct:
-      case RoundEvent.countdownTick:
-        HapticFeedback.lightImpact();
-      case RoundEvent.combo:
-      case RoundEvent.go:
-        HapticFeedback.mediumImpact();
-      case RoundEvent.wrong:
-      case RoundEvent.end:
-        HapticFeedback.heavyImpact();
-    }
-  }
-
-  void _finish() {
+  Future<void> _finish() async {
     if (_handedOff) return;
     _handedOff = true;
     _ticker.stop();
-    final RoundSummary summary = AppScope.read(context).apply(_round.result);
-    Navigator.of(context).pushReplacement(
+    final RoundSummary summary =
+        await ref.read(progressProvider.notifier).apply(_round.result);
+    if (!mounted) return;
+    await Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => ResultScreen(summary: summary)),
     );
   }
@@ -86,7 +75,10 @@ class _PlayScreenState extends State<PlayScreen>
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final String? ch = event.character;
-    if (ch != null && ch.length == 1 && ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) {
+    if (ch != null &&
+        ch.length == 1 &&
+        ch.codeUnitAt(0) >= 48 &&
+        ch.codeUnitAt(0) <= 57) {
       _round.press(ch);
       return KeyEventResult.handled;
     }
@@ -103,40 +95,86 @@ class _PlayScreenState extends State<PlayScreen>
 
   @override
   Widget build(BuildContext context) {
-    final Tokens t = Tokens.of(context);
     return Focus(
       autofocus: true,
       onKeyEvent: _onKey,
       child: PaperScaffold(
-        child: ListenableBuilder(
-          listenable: _round,
-          builder: (BuildContext context, Widget? _) {
-            final RoundPhase phase = _round.phase;
-            final bool live = phase == RoundPhase.running;
-            final bool showQuestion =
-                live || phase == RoundPhase.timeUp;
-            return Stack(
-              children: <Widget>[
-                Column(
-                  children: <Widget>[
-                    const SizedBox(height: 10),
-                    _Hud(round: _round, onQuit: () => Navigator.of(context).pop()),
-                    const SizedBox(height: 10),
-                    _TimeBar(round: _round),
-                    Expanded(child: _Stage(round: _round, showQuestion: showQuestion)),
-                    _Numpad(round: _round),
-                    const SizedBox(height: 10),
-                  ],
-                ),
-                if (phase == RoundPhase.countdown)
-                  _Overlay(text: '${_round.countdownNumber}', size: 150, color: t.pen),
-                if (phase == RoundPhase.timeUp)
-                  _Overlay(text: 'Time', size: 96, color: t.pen),
-              ],
-            );
-          },
-        ),
+        builder: (BuildContext context, bool wide) {
+          return LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints box) {
+              return ListenableBuilder(
+                listenable: _round,
+                builder: (BuildContext context, Widget? _) =>
+                    _PlayBody(round: _round, wide: wide, box: box),
+              );
+            },
+          );
+        },
       ),
+    );
+  }
+}
+
+class _PlayBody extends StatelessWidget {
+  const _PlayBody({required this.round, required this.wide, required this.box});
+
+  final RoundController round;
+  final bool wide;
+  final BoxConstraints box;
+
+  @override
+  Widget build(BuildContext context) {
+    final Tokens t = Tokens.of(context);
+    final RoundPhase phase = round.phase;
+    final bool showQuestion =
+        phase == RoundPhase.running || phase == RoundPhase.timeUp;
+
+    // Key height comes from the space we have, not the device: the fixed
+    // chrome (HUD, bar, stage minimum) is subtracted and the rest is shared
+    // between four rows of keys.
+    final double padSpace = wide ? box.maxHeight - 20 : box.maxHeight - 276;
+    final double keyHeight = math.max(40.0, math.min(66.0, padSpace / 4 - 10));
+
+    final Widget top = Column(
+      children: <Widget>[
+        const SizedBox(height: 10),
+        _Hud(round: round, onQuit: () => Navigator.of(context).pop()),
+        const SizedBox(height: 10),
+        _TimeBar(round: round),
+      ],
+    );
+    final Widget stage = _Stage(round: round, showQuestion: showQuestion);
+    final Widget pad = _Numpad(round: round, keyHeight: keyHeight);
+
+    final Widget layout = wide
+        ? Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  children: <Widget>[top, Expanded(child: stage)],
+                ),
+              ),
+              const SizedBox(width: 24),
+              SizedBox(width: 340, child: Center(child: pad)),
+            ],
+          )
+        : Column(
+            children: <Widget>[
+              top,
+              Expanded(child: stage),
+              pad,
+              const SizedBox(height: 10),
+            ],
+          );
+
+    return Stack(
+      children: <Widget>[
+        layout,
+        if (phase == RoundPhase.countdown)
+          _Overlay(text: '${round.countdownNumber}', size: 150, color: t.pen),
+        if (phase == RoundPhase.timeUp)
+          _Overlay(text: 'Time', size: 96, color: t.pen),
+      ],
     );
   }
 }
@@ -169,8 +207,6 @@ class _Hud extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Tokens t = Tokens.of(context);
-    final int secs = (round.timeLeftMs / 1000).ceil();
-    final bool low = round.phase == RoundPhase.running && secs <= 10;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -191,9 +227,17 @@ class _Hud extends StatelessWidget {
             const SizedBox(width: 10),
             SizedBox(
               width: 48,
-              child: Text(
-                '$secs',
-                style: t.mono(34, color: low ? t.bad : t.ink, spacing: -0.7),
+              child: ValueListenableBuilder<int>(
+                valueListenable: round.timeLeftMs,
+                builder: (BuildContext context, int ms, Widget? _) {
+                  final int secs = (ms / 1000).ceil();
+                  final bool low =
+                      round.phase == RoundPhase.running && secs <= 10;
+                  return Text(
+                    '$secs',
+                    style: t.mono(34, color: low ? t.bad : t.ink, spacing: -0.7),
+                  );
+                },
               ),
             ),
           ],
@@ -251,6 +295,8 @@ class _TallyPainter extends CustomPainter {
       old.filled != filled || old.on != on || old.off != off;
 }
 
+/// Shrinks every frame, so it listens to the time notifier on its own and
+/// sits on its own paint layer. Nothing else on screen rebuilds with it.
 class _TimeBar extends StatelessWidget {
   const _TimeBar({required this.round});
 
@@ -259,9 +305,15 @@ class _TimeBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Tokens t = Tokens.of(context);
-    final double left = round.timeLeftMs / round.roundMs;
-    final bool low = round.timeLeftMs <= 10000 && round.phase != RoundPhase.countdown;
-    return MeterBar(value: left, color: low ? t.bad : t.pen);
+    return RepaintBoundary(
+      child: ValueListenableBuilder<int>(
+        valueListenable: round.timeLeftMs,
+        builder: (BuildContext context, int ms, Widget? _) {
+          final bool low = ms <= 10000 && round.phase != RoundPhase.countdown;
+          return MeterBar(value: ms / round.roundMs, color: low ? t.bad : t.pen);
+        },
+      ),
+    );
   }
 }
 
@@ -276,48 +328,51 @@ class _Stage extends StatelessWidget {
     final Tokens t = Tokens.of(context);
     final bool locked = showQuestion && round.locked;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          SizedBox(
-            height: 72,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                showQuestion ? round.question.text : 'Ready',
-                style: t.display(64, spacing: -2.2),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            SizedBox(
+              height: 72,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  showQuestion ? round.question.text : 'Ready',
+                  style: t.display(64, spacing: -2.2),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 58,
-            child: showQuestion
-                ? Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: <Widget>[
-                      for (int i = 0; i < round.answerLength; i++)
-                        _Slot(
-                          char: i < round.typed.length ? round.typed[i] : '',
-                          current: !locked && i == round.typed.length,
-                          wrong: locked,
-                        ),
-                    ],
-                  )
-                : null,
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 26,
-            child: locked
-                ? Text(
-                    '= ${round.question.answer}',
-                    style: t.mono(20, color: t.bad),
-                  )
-                : null,
-          ),
-        ],
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 58,
+              child: showQuestion
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: <Widget>[
+                        for (int i = 0; i < round.answerLength; i++)
+                          _Slot(
+                            char: i < round.typed.length ? round.typed[i] : '',
+                            current: !locked && i == round.typed.length,
+                            wrong: locked,
+                          ),
+                      ],
+                    )
+                  : null,
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 26,
+              child: locked
+                  ? Text(
+                      '= ${round.question.answer}',
+                      style: t.mono(20, color: t.bad),
+                    )
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -356,23 +411,24 @@ class _Slot extends StatelessWidget {
 }
 
 class _Numpad extends StatelessWidget {
-  const _Numpad({required this.round});
+  const _Numpad({required this.round, required this.keyHeight});
 
   final RoundController round;
+  final double keyHeight;
+
+  static const List<List<String>> _rows = <List<String>>[
+    <String>['1', '2', '3'],
+    <String>['4', '5', '6'],
+    <String>['7', '8', '9'],
+    <String>['back', '0', 'skip'],
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final double h = MediaQuery.sizeOf(context).height;
-    final double keyHeight = math.max(50.0, math.min(66.0, h * 0.085));
-    const List<List<String>> rows = <List<String>>[
-      <String>['1', '2', '3'],
-      <String>['4', '5', '6'],
-      <String>['7', '8', '9'],
-      <String>['back', '0', 'skip'],
-    ];
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        for (final List<String> row in rows)
+        for (final List<String> row in _rows)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Row(
@@ -413,7 +469,10 @@ class _Key extends StatelessWidget {
     final Widget label = switch (keyName) {
       'back' => Icon(Icons.backspace_outlined, size: 24, color: t.ink),
       'skip' => Text('SKIP', style: t.mono(12, spacing: 1.4)),
-      _ => Text(keyName, style: t.mono(30)),
+      _ => FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(keyName, style: t.mono(30)),
+        ),
     };
     return PressBox(
       fireOnDown: true,

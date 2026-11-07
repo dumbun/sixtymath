@@ -2,12 +2,25 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// Graph-paper background with a centred, phone-width column.
-class PaperScaffold extends StatelessWidget {
-  const PaperScaffold({super.key, required this.child, this.maxWidth = 460});
+/// True when the window is wide and short enough to put two panes side by
+/// side (a tablet, a phone on its side, a resized desktop window). Decided
+/// from the space we are given, never from the device type.
+bool isWideLandscape(BoxConstraints c) =>
+    c.maxWidth >= 640 && c.maxWidth > c.maxHeight * 1.2;
 
-  final Widget child;
-  final double maxWidth;
+/// Graph-paper background with a centred column. The builder is told whether
+/// the window is [isWideLandscape] so a screen can pick its layout.
+class PaperScaffold extends StatelessWidget {
+  const PaperScaffold({
+    super.key,
+    required this.builder,
+    this.narrowMaxWidth = 460,
+    this.wideMaxWidth = 920,
+  });
+
+  final Widget Function(BuildContext context, bool wide) builder;
+  final double narrowMaxWidth;
+  final double wideMaxWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -17,14 +30,21 @@ class PaperScaffold extends StatelessWidget {
       body: CustomPaint(
         painter: _GridPainter(t.grid),
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: maxWidth),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: child,
-              ),
-            ),
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints box) {
+              final bool wide = isWideLandscape(box);
+              return Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: wide ? wideMaxWidth : narrowMaxWidth,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: builder(context, wide),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -225,9 +245,19 @@ class StatStrip extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(items[i].$1.toUpperCase(), style: t.label()),
+                      Text(
+                        items[i].$1.toUpperCase(),
+                        style: t.label(),
+                        maxLines: 1,
+                        overflow: TextOverflow.fade,
+                        softWrap: false,
+                      ),
                       const SizedBox(height: 3),
-                      Text(items[i].$2, style: t.mono(22)),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(items[i].$2, style: t.mono(22)),
+                      ),
                     ],
                   ),
                 ),

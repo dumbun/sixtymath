@@ -1,46 +1,22 @@
 import 'package:flutter/foundation.dart';
 
-import '../logic/analysis.dart';
-import '../logic/mulberry32.dart';
-import '../logic/question.dart';
-import '../logic/scoring.dart';
-
-enum RoundMode { sprint, daily }
+import '../../../core/analysis.dart';
+import '../../../core/mulberry32.dart';
+import '../../../core/question.dart';
+import '../../../core/round_event.dart';
+import '../../../core/round_result.dart';
+import '../../../core/scoring.dart';
 
 enum RoundPhase { idle, countdown, running, timeUp, finished }
-
-/// Things the UI turns into haptics or sound.
-enum RoundEvent { key, correct, combo, wrong, skip, countdownTick, go, end }
-
-class RoundResult {
-  const RoundResult({
-    required this.mode,
-    required this.score,
-    required this.correct,
-    required this.wrong,
-    required this.skipped,
-    required this.maxCombo,
-    required this.log,
-  });
-
-  final RoundMode mode;
-  final int score;
-  final int correct;
-  final int wrong;
-  final int skipped;
-  final int maxCombo;
-  final List<LogEntry> log;
-
-  int get attempts => correct + wrong + skipped;
-  double get accuracy => attempts == 0 ? 0 : correct / attempts;
-  Analysis get analysis => analyse(log);
-  List<LogEntry> get misses =>
-      log.where((LogEntry e) => !e.ok).toList(growable: false);
-}
 
 /// The whole 60-second round as a state machine. It never reads the clock:
 /// the screen feeds it `nowMs` from a ticker, so tests can drive it with
 /// fake time.
+///
+/// Listeners are told only when something the player can see changes
+/// (a digit, a score, a new question, a phase). The shrinking time bar and
+/// the seconds readout listen to [timeLeftMs] instead, so a 60 fps tick
+/// rebuilds those two widgets and nothing else.
 class RoundController extends ChangeNotifier {
   RoundController({
     required this.mode,
@@ -51,7 +27,9 @@ class RoundController extends ChangeNotifier {
     this.lockMs = 420,
     this.timeUpMs = 700,
     this.onEvent,
-  }) : _rng = Mulberry32(seed);
+  }) : _rng = Mulberry32(seed) {
+    timeLeftMs = ValueNotifier<int>(roundMs);
+  }
 
   final RoundMode mode;
   final int startLevel;
@@ -60,6 +38,9 @@ class RoundController extends ChangeNotifier {
   final int lockMs;
   final int timeUpMs;
   final void Function(RoundEvent event)? onEvent;
+
+  /// Milliseconds left in the round. Changes every frame while running.
+  late final ValueNotifier<int> timeLeftMs;
 
   final Mulberry32 _rng;
   final List<LogEntry> _log = <LogEntry>[];
@@ -76,12 +57,10 @@ class RoundController extends ChangeNotifier {
   int correct = 0;
   int wrong = 0;
   int skipped = 0;
-  int timeLeftMs = 0;
 
   int _questionIndex = 0;
   String? _lastText;
   int _t0 = 0;
-  int _runStart = 0;
   int _runEnd = 0;
   int _questionStart = 0;
   int _lockUntil = 0;
@@ -106,7 +85,7 @@ class RoundController extends ChangeNotifier {
     _t0 = nowMs;
     phase = RoundPhase.countdown;
     countdownNumber = 3;
-    timeLeftMs = roundMs;
+    timeLeftMs.value = roundMs;
     onEvent?.call(RoundEvent.countdownTick);
     notifyListeners();
   }
@@ -121,34 +100,34 @@ class RoundController extends ChangeNotifier {
       case RoundPhase.countdown:
         final int elapsed = nowMs - _t0;
         if (elapsed >= stepMs * 3) {
-          _runStart = _t0 + stepMs * 3;
-          _runEnd = _runStart + roundMs;
+          _runEnd = _t0 + stepMs * 3 + roundMs;
           phase = RoundPhase.running;
-          _questionStart = nowMs;
           onEvent?.call(RoundEvent.go);
           _nextQuestion();
-          timeLeftMs = roundMs;
+          timeLeftMs.value = roundMs;
+          notifyListeners();
         } else {
           final int n = 3 - elapsed ~/ stepMs;
           if (n != countdownNumber) {
             countdownNumber = n;
             onEvent?.call(RoundEvent.countdownTick);
+            notifyListeners();
           }
         }
-        notifyListeners();
       case RoundPhase.running:
         if (locked && nowMs >= _lockUntil) {
           _nextQuestion();
+          notifyListeners();
         }
         if (nowMs >= _runEnd) {
-          timeLeftMs = 0;
+          timeLeftMs.value = 0;
           phase = RoundPhase.timeUp;
           _timeUpAt = nowMs;
           onEvent?.call(RoundEvent.end);
+          notifyListeners();
         } else {
-          timeLeftMs = _runEnd - nowMs;
+          timeLeftMs.value = _runEnd - nowMs;
         }
-        notifyListeners();
       case RoundPhase.timeUp:
         if (nowMs - _timeUpAt >= timeUpMs) {
           phase = RoundPhase.finished;
@@ -257,5 +236,11 @@ class RoundController extends ChangeNotifier {
     onEvent?.call(RoundEvent.skip);
     _nextQuestion();
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    timeLeftMs.dispose();
+    super.dispose();
   }
 }

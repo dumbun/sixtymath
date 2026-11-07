@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../game/round_controller.dart';
-import '../logic/analysis.dart';
-import '../logic/question.dart';
-import '../logic/scoring.dart';
-import '../state/progress.dart';
-import '../theme/tokens.dart';
-import 'play_screen.dart';
-import 'widgets.dart';
+import '../../../core/analysis.dart';
+import '../../../core/progress.dart';
+import '../../../core/question.dart';
+import '../../../core/round_result.dart';
+import '../../../core/scoring.dart';
+import '../../../shared/widgets.dart';
+import '../../../theme/tokens.dart';
+import '../../play/presentation/play_screen.dart';
 
 class ResultScreen extends StatelessWidget {
   const ResultScreen({super.key, required this.summary});
@@ -65,7 +65,9 @@ class ResultScreen extends StatelessWidget {
         : (cur.best > 0 ? 'Beat ${cur.best}' : 'One more sprint');
 
     return PaperScaffold(
-      child: Column(
+      narrowMaxWidth: 460,
+      wideMaxWidth: 620,
+      builder: (BuildContext context, bool wide) => Column(
         children: <Widget>[
           Expanded(
             child: ListView(
